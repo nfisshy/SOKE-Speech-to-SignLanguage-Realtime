@@ -1,0 +1,110 @@
+NAME: SOKE_COLAB_ASL_21K_8S
+ACCELERATOR: gpu
+NUM_NODES: 1
+DEVICE: [0]
+PRECISION: bf16-mixed
+MATMUL_PRECISION: high
+BENCHMARK: true
+PROGRESS_BAR: tqdm
+
+TRAIN:
+  STAGE: lm_pretrain
+  NUM_WORKERS: 8
+  BATCH_SIZE: 16
+  END_EPOCH: 80
+  RESUME: ''
+  PRETRAINED: ''
+  PRETRAINED_VAE: /content/SOKE_COLAB_DATA/pretrained/tokenizer.ckpt
+
+  OPTIM:
+    target: AdamW
+    params:
+      lr: 2e-4
+      betas: [0.9, 0.99]
+      weight_decay: 0.0
+
+  LR_SCHEDULER:
+    target: CosineAnnealingLR
+    params:
+      T_max: ${TRAIN.END_EPOCH}
+      eta_min: 1e-6
+
+EVAL:
+  BATCH_SIZE: 4
+  NUM_WORKERS: 4
+  SPLIT: val
+
+TEST:
+  CHECKPOINTS: null
+  SPLIT: test
+  BATCH_SIZE: 4
+  NUM_WORKERS: 4
+  REPLICATION_TIMES: 1
+  SAVE_PREDICTIONS: false
+
+DATASET:
+  target: mGPT.data.H2S.H2SDataModule
+  H2S:
+    DATASET_NAME: how2sign
+    ROOT: /content/SOKE_COLAB_DATA/data/How2Sign
+    CSL_ROOT: /content/SOKE_COLAB_DATA/data/CSL-Daily
+    PHOENIX_ROOT: /content/SOKE_COLAB_DATA/data/Phoenix_2014T
+    MEAN_PATH: /content/SOKE_COLAB_DATA/data/stats/mean.pt
+    STD_PATH: /content/SOKE_COLAB_DATA/data/stats/std.pt
+    MAX_MOTION_LEN: 160
+    MIN_MOTION_LEN: 40
+    MAX_TEXT_LEN: 40
+    PICK_ONE_TEXT: true
+    FRAME_RATE: 20.0
+    UNIT_LEN: 4
+    STD_TEXT: false
+    FILTER:
+      SEED: 1234
+      STRATEGY: random
+      TRAIN_MAX_DURATION: 8.0
+      TRAIN_MAX_SAMPLES: 0
+      VAL_MAX_DURATION: 8.0
+      VAL_MAX_SAMPLES: 0
+      TEST_MAX_DURATION: 8.0
+      TEST_MAX_SAMPLES: 0
+  CODE_PATH: TOKENS_how2sign_colab_21k_8s
+
+METRIC:
+  TYPE: ['TM2TMetrics']
+
+LOSS:
+  LAMBDA_FEATURE: 1.0
+  LAMBDA_VELOCITY: 0.0
+  LAMBDA_COMMIT: 0.02
+  LAMBDA_CLS: 1.0
+  ABLATION:
+    RECONS_LOSS: l1_smooth
+
+model:
+  target: mGPT.models.mgpt.MotionGPT
+  params:
+    condition: text
+    task: t2m
+    lm: ${lm.mbart_h2s_csl_phoenix}
+    motion_vae: ${vq.re96}
+    hand_vae_cfg: ${vq.hand192}
+    rhand_vae_cfg: ${vq.hand192}
+
+LOGGER:
+  TYPE: []
+  VAL_EVERY_STEPS: 5
+  WANDB:
+    params:
+      project: null
+
+CHECKPOINT:
+  ENABLE_SAFE_CHECKPOINT: true
+  EVERY_N_TRAIN_STEPS: 0
+  EVERY_N_EPOCHS: 1
+  KEEP_EPOCH_CHECKPOINTS: false
+  SAVE_ON_EXCEPTION: true
+  SYNC_DIRPATH: /content/drive/MyDrive/SOKE_COLAB/experiments/mgpt/SOKE_COLAB_ASL_21K_8S/checkpoints
+  SYNC_EVERY_N_TRAIN_STEPS: 0
+  SYNC_EVERY_N_EPOCHS: 1
+  SYNC_ON_EXCEPTION: true
+  MONITOR_DATASETS: ['how2sign']
