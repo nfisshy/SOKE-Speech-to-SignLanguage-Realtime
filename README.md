@@ -1,87 +1,136 @@
-# Signs as Tokens: A Retrieval-Enhanced Multilingual Sign Language Generator
-Official implementation for the ICCV 2025 paper, [Signs as Tokens: A Retrieval-Enhanced Multilingual Sign Language Generator](https://arxiv.org/pdf/2411.17799).
+# SOKE-ASL: Real-Time Speech-to-ASL Sign Language Generation
 
+**Base model:** [Signs as Tokens: A Retrieval-Enhanced Multilingual Sign Language Generator](https://arxiv.org/pdf/2411.17799) (Zuo et al., **ICCV 2025**)
+---
+## 1. Objective
 
-## Introduction
-Sign language is a visual language that encompasses all linguistic features of natural languages and serves as the primary communication method for the deaf and hard-of-hearing communities. Although many studies have successfully adapted pretrained language models (LMs) for sign language translation (sign-to-text), the reverse task—sign language generation (text-to-sign)—remains largely unexplored. In this work, we introduce a multilingual sign language model, Signs as Tokens (SOKE), which can generate 3D sign avatars autoregressively from text inputs using a pretrained LM. To align sign language with the LM, we leverage a decoupled tokenizer that discretizes continuous signs into token sequences representing various body parts. During decoding, unlike existing approaches that flatten all part-wise tokens into a single sequence and predict one token at a time, we propose a multi-head decoding method capable of predicting multiple tokens simultaneously. This approach improves inference efficiency while maintaining effective information fusion across different body parts. To further ease the generation process, we propose a retrieval-enhanced SLG approach, which incorporates external sign dictionaries to provide accurate word-level signs as auxiliary conditions, significantly improving the precision of generated signs. 
+SOKE is a text-to-sign generator trained and evaluated on offline, batch data across three sign languages (How2Sign/ASL, CSL-Daily, Phoenix-2014T), using pre-fit SMPL-X poses. This project has two goals:
 
+1. **Fine-tune SOKE specifically on ASL** (How2Sign) rather than relying on the multilingual checkpoint, and measure motion-reconstruction accuracy after fine-tuning.
+2. **Extend SOKE into a live speech-to-sign pipeline** by prepending speech recognition, wrapping the generator in an endpoint-detection state machine, and deploying inference and rendering under real-time latency constraints on a Raspberry Pi 4B.
 
+SOKE's own paper only addresses (1) — text in, motion out, offline. Component (2) is not part of the original work; it is the system-engineering contribution layered on top for this project.
 
-## Environment
-Please run 
+---
+
+## 2. System Architecture
+
 ```
-conda create python=3.10 --name soke
-conda activate soke
-pip install -r requirements.txt
-```
-
-
-## Data
-### Continuous Sign Language Datasets
-How2Sign: [raw videos](https://how2sign.github.io/)(Green Screen RGB clips (frontal view)) and [split files](https://drive.google.com/drive/folders/1sPhBwmiWCXLZSHtM3fpotbz3BDgoYmco?usp=sharing).
-
-CSL-Daily: [raw videos](http://home.ustc.edu.cn/~zhouh156/dataset/csl-daily/) and [split files](https://drive.google.com/drive/folders/17uPm6r5_DQ9CIYZonfwQLpw1XI8LeNEr?usp=drive_link). 
-
-Phoenix-2014T: [raw videos](https://www-i6.informatik.rwth-aachen.de/~koller/RWTH-PHOENIX-2014-T/) and [split files](https://drive.google.com/drive/folders/1Z2zjOH5wvwT7x_F6IycWAN-nh2wgJOx1?usp=sharing).
-
-SMPL-X Poses can be downloaded from the project [homepage](https://2000zrl.github.io/soke/).
-
-
-## Models
-### Human Models
-Please download human models (mano, smpl, smplh, and smplx) from [here](https://drive.google.com/file/d/1YIXddvvBJPQVRuKON2Xc9EEDXikRTteo/view?usp=sharing) and unzip them into deps/smpl_models. 
-
-Download t2m evaluators via `sh prepare/download_t2m_evaluators.sh`.
-
-Down t5 models via `sh prepare/prepare_t5.sh`. Note that this aims to avoid errors caused by the default config.
-
-### Language Model
-We use mBart-large-cc25, which can be downloaded [here](https://drive.google.com/drive/folders/1GnaHrI0PC4ZRr-GK3FS2GXcQwlrpA5Gi?usp=sharing). Put the files into `deps/mbart-h2s-csl-phoenix`
-
-
-## Decoupled Tokenizer
-### Training
-```
-python -m train --cfg configs/deto.yaml --nodebug
+Microphone → VAD segmentation → Faster-Whisper (ASR) → text normalization
+    → mBART/SOKE (motion-token generation) → 3× VQ-VAE decoders
+    → SMPL-X (mesh + joints) → pose compression → Raspberry Pi client → skeleton render
 ```
 
-### Inference
-```
-python -m test --cfg configs/deto.yaml --nodebug
-```
-We also provide the [mean](https://drive.google.com/file/d/1NH-eVtS0nNjMjCwae-A1ii5sxj44C3bo/view?usp=sharing) and the [std](https://drive.google.com/file/d/1FHHWS0GPM2s6S2PB2JHv4ufdEbzezuKW/view?usp=sharing) of the SMPL-X poses. The checkpoint of the tokenizer is available [here](https://drive.google.com/file/d/18HdPeXwz4O6LY4FZMC5BZ9rja4pcUTFk/view?usp=sharing).
+### 2.1. Speech Recognition (Faster-Whisper)
 
+Audio is transcribed with Faster-Whisper, a CTranslate2-optimized reimplementation of Whisper, chosen to decouple ASR from motion generation into two independently verifiable stages rather than mapping audio directly to motion. Running under real-time constraints, the model uses a reduced size, quantized weights, and a small beam width to trade a small amount of accuracy for lower latency. Recognized text is normalized (filler-word removal, whitespace cleanup, repetition collapsing) before being passed to the generator.
 
-## Autoregressive Multilingual Generator
-### Training
+### 2.2. Decoupled Tokenizer (VQ-VAE)
+
+A language model operates on discrete tokens; body motion is continuous 3D coordinates. SOKE bridges this gap with a **decoupled tokenizer** — three independent VQ-VAEs, one per body region:
+
+| Tokenizer | Input | Output | Role |
+|---|---|---|---|
+| Body VQ-VAE | Body token | Upper-body, head, jaw, expression params | Reconstructs torso motion |
+| Left-hand VQ-VAE | Left-hand token | 45 parameters | Reconstructs left-hand joints |
+| Right-hand VQ-VAE | Right-hand token | 45 parameters | Reconstructs right-hand joints |
+
+Hands are tokenized separately from the torso because most of ASL's lexical information lives in hand shape and finger configuration — a single shared tokenizer would blur that detail against coarser body motion. Each token corresponds to roughly 4 frames; an L-token sequence decodes to a motion sequence of length T ≈ 4L, each frame carrying 133 parameters.
+
+```bash
+python -m train --cfg configs/deto.yaml --nodebug   # tokenizer training
+python -m test  --cfg configs/deto.yaml --nodebug   # tokenizer inference
 ```
+
+### 2.3. Autoregressive Generator (mBART-large-cc25)
+
+A pretrained multilingual mBART backbone consumes normalized text and autoregressively generates motion-token sequences — the model predicts *discrete motion codes* rather than raw joint coordinates, letting it inherit a language model's sequence-modeling capacity for word order, semantics, and temporal progression.
+
+Two departures from prior flatten-and-decode-one-token-at-a-time approaches:
+
+- **Multi-head decoding** — body / left-hand / right-hand tokens are predicted simultaneously through separate decoding heads, cutting the number of decode steps by roughly two-thirds while still fusing cross-part information.
+- **Retrieval-enhanced generation** — keywords in the input sentence are used to retrieve word-level sign motion tokens from an external sign dictionary, which are fed to the decoder as auxiliary conditioning. This improves accuracy specifically on rare words, numerals, and hand shapes the base model would otherwise under-generate.
+
+```bash
 python -m get_motion_code --cfg configs/soke.yaml --nodebug
-python -m train --cfg configs/soke.yaml --nodebug  #Note that please first update the path of the tokenizer's checkpoint.
+python -m train            --cfg configs/soke.yaml --nodebug
+python -m test              --cfg configs/soke.yaml --task t2m
 ```
 
-### Inference
+### 2.4. Body Rendering (SMPL-X)
+
+The `[T, 133]` parameter sequence is passed through SMPL-X to produce `vertices [T, 10475, 3]` (mesh for avatar rendering) and `joints [T, N, 3]` (skeleton — used both for visualization and for evaluation).
+
+### 2.5. Endpoint Detection (Speech-side State Machine)
+
+Because SOKE's paper assumes complete text as input, utterance boundaries must be detected before any request is sent to the generator. This is handled by an energy-based VAD running client-side:
+
+| Stage | Rule |
+|---|---|
+| Frame size | 100 ms |
+| Noise calibration | 0.8 s ambient sampling at session start |
+| Utterance finalize | 0.45 s of silence, or 7 s hard cap |
+| Rejection filters | discard utterances < 0.25 s total, or < 0.20 s of actual speech |
+
+The 7 s cap exists purely to bound worst-case latency — without it, a long uninterrupted sentence would delay generation indefinitely. Rejection filters run before any network call, so false triggers never reach the GPU-side pipeline.
+
+---
+
+## 3. Data
+
+| Attribute | Value |
+|---|---|
+| Dataset | How2Sign (ASL subset — distinct from SOKE's original multilingual training set) |
+| Scale | ~80 hours of video, ~35,000 sentences, with English transcripts, gloss, audio, and body/hand/face pose |
+| Video source | Green-screen RGB, frontal view |
+| SMPL-X poses | Pre-fit, from the project homepage (no pose-fitting run in this repo) |
+| Split | Per How2Sign's original split files |
+
+Human body models (SMPL / SMPL-X / MANO / SMPLH), the t2m evaluator suite, and mBart-large-cc25 are pulled via the `prepare/` scripts — none are trained from scratch here. Three files distinguish this repo from the upstream SOKE codebase — `ASL_ONLY_DOWNLOAD_GUIDE.md`, `COLAB_TRAIN_SOKE_ASL_GUIDE.md`, `TRAIN_ASL_FROM_SCRATCH_GUIDE.md` — indicating the ASL-specific fine-tuning workflow ran on Google Colab rather than a dedicated GPU cluster.
+
+---
+
+## 4. Evaluation Metric
+
+Output is a motion sequence, not text, so BLEU does not apply. Evaluation uses **DTW-MPJPE**:
+
+- **MPJPE** (Mean Per Joint Position Error): mean Euclidean error between predicted and reference 3D joint coordinates, after root-relative alignment.
+- **DTW** (Dynamic Time Warping): two motion sequences can convey the same content at different signing speeds. DTW finds an optimal alignment path between predicted and reference sequences before averaging joint error along that path, so tempo mismatches aren't penalized as content errors.
+
 ```
-python -m test --cfg configs/soke.yaml --task t2m  #you can set SAVE_PREDICTIONS in the config file to True if you want to save them.
+DTW-MPJPE = (1 / |P|) * Σ_{(i,j) ∈ P} d(x_i, y_j)
 ```
 
-## Visualizations
-Simple visualizations for meshes can be done by running
-```
-python -m vis_mesh --cfg=configs/soke.yaml --demo_dataset=csl
-```
-For colorful visualizations, please refer to the configurations of [BlenderToolbox](https://github.com/HTDerekLiu/BlenderToolbox), and run
-```
-python vis_blender.py
-```
+where `P` is the set of index pairs on the optimal DTW alignment path, and `d(x_i, y_j)` is the per-joint Euclidean error between predicted frame `i` and reference frame `j`.
 
-## Acknowledgements
-We sincerely thank the open-sourced codes of these works where our code is based on: [MotionGPT](https://github.com/OpenMotionLab/MotionGPT/), [ProgressiveTransformer](https://github.com/BenSaunders27/ProgressiveTransformersSLP), [WiLoR](https://github.com/rolpotamias/WiLoR), and [OSX](https://github.com/IDEA-Research/OSX/). 
+---
 
-Please contact [r.zuo@imperial.ac.uk](mailto:r.zuo@imperial.ac.uk) for further questions.
+## 5. Results
 
+| Body part | DTW-MPJPE (test) |
+|---|---|
+| Upper body | 14.8 mm |
+| Left hand | 22.5 mm |
+| Right hand | 23.1 mm |
+| **Average** | **18.7 mm (val) / 20.3 mm (test)** |
 
-## Citations
-```
+**Observation:** hand error runs ~55% higher than body error, consistent with the decoupled-tokenizer design rationale — hands have more degrees of freedom and finer articulation than torso motion, so even with a dedicated VQ-VAE per hand, they remain the harder region to reconstruct precisely.
+
+**Metric limitation:** DTW-MPJPE measures geometric deviation after temporal alignment only — it does **not** verify whether the generated sign is semantically correct. A motion that is a few millimeters off but shape-plausible could still convey the wrong meaning if it lands near a minimal pair in ASL.
+
+### End-to-end latency (system-level, per final report)
+
+| Metric | Baseline | Optimized | Improvement |
+|---|---|---|---|
+| Mean latency (VAD finalize → first rendered frame) | 2.146 s | 1.562 s | −27.2% |
+| P95 latency | 3.284 s | 2.421 s | −26.3% |
+
+Optimizations contributing to this reduction: bounded audio queue (~2 s), a hard cap of 2 in-flight generation requests, raw-WAV transport (no multipart overhead), a reused HTTP session with gzip-compressed pose payloads, a (text, language)-keyed pose cache to skip re-inference on repeated utterances, and FPS-capped skeleton rendering (16–24 FPS, dirty-frame skipping) on the Pi 4B client.
+
+---
+## 6. Citation
+
+```bibtex
 @inproceedings{zuo2025soke,
     title={Signs as Tokens: A Retrieval-Enhanced Multilingual Sign Language Generator},
     author={Zuo, Ronglai and Potamias, Rolandos Alexandros and Ververas, Evangelos and Deng, Jiankang and Zafeiriou, Stefanos},
@@ -89,3 +138,5 @@ Please contact [r.zuo@imperial.ac.uk](mailto:r.zuo@imperial.ac.uk) for further q
     year={2025}
 }
 ```
+
+Built on: [MotionGPT](https://github.com/OpenMotionLab/MotionGPT/), [ProgressiveTransformer](https://github.com/BenSaunders27/ProgressiveTransformersSLP), [WiLoR](https://github.com/rolpotamias/WiLoR), [OSX](https://github.com/IDEA-Research/OSX/).
