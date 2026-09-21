@@ -95,14 +95,13 @@ Evaluation uses **DTW-MPJPE**:
 - **MPJPE** (Mean Per Joint Position Error): mean Euclidean error between predicted and reference 3D joint coordinates, after root-relative alignment.
 - **DTW** (Dynamic Time Warping): two motion sequences can convey the same content at different signing speeds. DTW finds an optimal alignment path between predicted and reference sequences before averaging joint error along that path, so tempo mismatches aren't penalized as content errors.
 
-```
+
 $$
 \mathrm{DTW\text{-}MPJPE}
 =
 \frac{1}{|P|}
 \sum_{(i,j) \in P} d(x_i, y_j)
 $$
-```
 
 where:
 - $P$ is the set of index pairs on the optimal DTW alignment path.
