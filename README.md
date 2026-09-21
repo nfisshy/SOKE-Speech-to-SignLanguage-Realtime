@@ -1,16 +1,15 @@
 # SOKE-ASL: Real-Time Speech-to-ASL Sign Language Generation
 
 **Base model:** [Signs as Tokens: A Retrieval-Enhanced Multilingual Sign Language Generator](https://arxiv.org/pdf/2411.17799) (Zuo et al., **ICCV 2025**)
+
 ---
+
 ## 1. Objective
 
 SOKE is a text-to-sign generator trained and evaluated on offline, batch data across three sign languages (How2Sign/ASL, CSL-Daily, Phoenix-2014T), using pre-fit SMPL-X poses. This project has two goals:
 
 1. **Fine-tune SOKE specifically on ASL** (How2Sign) rather than relying on the multilingual checkpoint, and measure motion-reconstruction accuracy after fine-tuning.
 2. **Extend SOKE into a live speech-to-sign pipeline** by prepending speech recognition, wrapping the generator in an endpoint-detection state machine, and deploying inference and rendering under real-time latency constraints on a Raspberry Pi 4B.
-
-SOKE's own paper only addresses (1) — text in, motion out, offline. Component (2) is not part of the original work; it is the system-engineering contribution layered on top for this project.
-
 ---
 
 ## 2. System Architecture
@@ -37,11 +36,6 @@ A language model operates on discrete tokens; body motion is continuous 3D coord
 
 Hands are tokenized separately from the torso because most of ASL's lexical information lives in hand shape and finger configuration — a single shared tokenizer would blur that detail against coarser body motion. Each token corresponds to roughly 4 frames; an L-token sequence decodes to a motion sequence of length T ≈ 4L, each frame carrying 133 parameters.
 
-```bash
-python -m train --cfg configs/deto.yaml --nodebug   # tokenizer training
-python -m test  --cfg configs/deto.yaml --nodebug   # tokenizer inference
-```
-
 ### 2.3. Autoregressive Generator (mBART-large-cc25)
 
 A pretrained multilingual mBART backbone consumes normalized text and autoregressively generates motion-token sequences — the model predicts *discrete motion codes* rather than raw joint coordinates, letting it inherit a language model's sequence-modeling capacity for word order, semantics, and temporal progression.
@@ -50,12 +44,6 @@ Two departures from prior flatten-and-decode-one-token-at-a-time approaches:
 
 - **Multi-head decoding** — body / left-hand / right-hand tokens are predicted simultaneously through separate decoding heads, cutting the number of decode steps by roughly two-thirds while still fusing cross-part information.
 - **Retrieval-enhanced generation** — keywords in the input sentence are used to retrieve word-level sign motion tokens from an external sign dictionary, which are fed to the decoder as auxiliary conditioning. This improves accuracy specifically on rare words, numerals, and hand shapes the base model would otherwise under-generate.
-
-```bash
-python -m get_motion_code --cfg configs/soke.yaml --nodebug
-python -m train            --cfg configs/soke.yaml --nodebug
-python -m test              --cfg configs/soke.yaml --task t2m
-```
 
 ### 2.4. Body Rendering (SMPL-X)
 
@@ -95,15 +83,12 @@ Evaluation uses **DTW-MPJPE**:
 - **MPJPE** (Mean Per Joint Position Error): mean Euclidean error between predicted and reference 3D joint coordinates, after root-relative alignment.
 - **DTW** (Dynamic Time Warping): two motion sequences can convey the same content at different signing speeds. DTW finds an optimal alignment path between predicted and reference sequences before averaging joint error along that path, so tempo mismatches aren't penalized as content errors.
 
-```markdown
 $$
-\mathrm{DTW\text{-}MPJPE}
-=
-\frac{1}{|P|}
-\sum_{(i,j) \in P} d(x_i, y_j)
+\text{DTW-MPJPE} = \frac{1}{|P|} \sum_{(i,j) \in P} d(x_i, y_j)
 $$
 
 where:
+
 - $P$ is the set of index pairs on the optimal DTW alignment path.
 - $d(x_i, y_j)$ is the per-joint Euclidean error between predicted frame $i$ and reference frame $j$.
 
@@ -132,6 +117,7 @@ where:
 Optimizations contributing to this reduction: bounded audio queue (~2 s), a hard cap of 2 in-flight generation requests, raw-WAV transport (no multipart overhead), a reused HTTP session with gzip-compressed pose payloads, a (text, language)-keyed pose cache to skip re-inference on repeated utterances, and FPS-capped skeleton rendering (16–24 FPS, dirty-frame skipping) on the Pi 4B client.
 
 ---
+
 ## 6. Citation
 
 ```bibtex
