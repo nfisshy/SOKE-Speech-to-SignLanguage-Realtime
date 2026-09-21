@@ -95,7 +95,6 @@ Evaluation uses **DTW-MPJPE**:
 - **MPJPE** (Mean Per Joint Position Error): mean Euclidean error between predicted and reference 3D joint coordinates, after root-relative alignment.
 - **DTW** (Dynamic Time Warping): two motion sequences can convey the same content at different signing speeds. DTW finds an optimal alignment path between predicted and reference sequences before averaging joint error along that path, so tempo mismatches aren't penalized as content errors.
 
-
 $$
 \mathrm{DTW\text{-}MPJPE}
 =
@@ -122,7 +121,7 @@ where:
 
 **Metric limitation:** DTW-MPJPE measures geometric deviation after temporal alignment only — it does **not** verify whether the generated sign is semantically correct. A motion that is a few millimeters off but shape-plausible could still convey the wrong meaning if it lands near a minimal pair in ASL.
 
-### End-to-end latency (system-level, per final report)
+### End-to-end latency (system-level)
 
 | Metric | Baseline | Optimized | Improvement |
 |---|---|---|---|
