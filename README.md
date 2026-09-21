@@ -86,8 +86,6 @@ The 7 s cap exists purely to bound worst-case latency — without it, a long uni
 | SMPL-X poses | Pre-fit, from the project homepage (no pose-fitting run in this repo) |
 | Split | Per How2Sign's original split files |
 
-Human body models (SMPL / SMPL-X / MANO / SMPLH), the t2m evaluator suite, and mBart-large-cc25 are pulled via the `prepare/` scripts — none are trained from scratch here. Three files distinguish this repo from the upstream SOKE codebase — `ASL_ONLY_DOWNLOAD_GUIDE.md`, `COLAB_TRAIN_SOKE_ASL_GUIDE.md`, `TRAIN_ASL_FROM_SCRATCH_GUIDE.md` — indicating the ASL-specific fine-tuning workflow ran on Google Colab rather than a dedicated GPU cluster.
-
 ---
 
 ## 4. Evaluation Metric
